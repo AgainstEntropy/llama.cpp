@@ -5635,6 +5635,57 @@ struct test_pad_reflect_1d : public test_case {
     }
 };
 
+// GGML_OP_GET_REL_POS
+struct test_get_rel_pos : public test_case {
+    const ggml_type type;
+    const int C;   // channels
+    const int qh;  // query height
+    const int kh;  // key height
+    const bool v;  // view (non-contiguous input)
+
+    std::string vars() override {
+        return VARS_TO_STR5(type, C, qh, kh, v);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4; // The default 1e-7 is too small for Vulkan.
+    }
+
+    test_get_rel_pos(ggml_type type = GGML_TYPE_F32,
+                     int C = 64,
+                     int qh = 7,
+                     int kh = 7,
+                     bool v = false)
+        : type(type), C(C), qh(qh), kh(kh), v(v) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // Input tensor has relative position embeddings table
+        // Shape: [C, 2*max(qh,kh)-1, 1, 1]
+        const int64_t ne_a[4] = {C, 2*std::max(qh, kh) - 1, 1, 1};
+
+        ggml_tensor * a;
+        if (v) {
+            // Create larger tensor and view into it (non-contiguous)
+            int64_t ne_large[4] = {C * 2, 2*std::max(qh, kh) - 1, 1, 1};
+            a = ggml_new_tensor(ctx, type, 4, ne_large);
+            ggml_set_name(a, "a");
+
+            a = ggml_view_4d(ctx, a, C, 2*std::max(qh, kh) - 1, 1, 1,
+                            a->nb[1], a->nb[2], a->nb[3], 0);
+            ggml_set_name(a, "view_of_a");
+        } else {
+            a = ggml_new_tensor(ctx, type, 4, ne_a);
+            ggml_set_name(a, "a");
+        }
+
+        // Output shape: [C, kh, qh, 1]
+        ggml_tensor * out = ggml_get_rel_pos(ctx, a, qh, kh);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_ROLL
 struct test_roll : public test_case {
     const int shift0;
@@ -7716,6 +7767,24 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad_ext());
     test_cases.emplace_back(new test_pad_reflect_1d());
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
+
+    // Relative position embedding tests (used in SAM)
+    // for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (bool v : {false, true}) {
+            // Square small: 3x3 attention
+            test_cases.emplace_back(new test_get_rel_pos(type, 5, 3, 3, v));
+            // Square medium: 7x7 attention (typical SAM)
+            test_cases.emplace_back(new test_get_rel_pos(type, 13, 7, 7, v));
+            // Square large: 14x14 attention
+            test_cases.emplace_back(new test_get_rel_pos(type, 27, 14, 14, v));
+            // Rectangular: 14x7 attention
+            test_cases.emplace_back(new test_get_rel_pos(type, 27, 14, 7, v));
+            // Edge case: 1x1 attention (minimum)
+            test_cases.emplace_back(new test_get_rel_pos(type, 1, 1, 1, v));
+        }
+    }
+
     test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_arange());
     test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 0.0f, 1048576.0f, 1.0f));

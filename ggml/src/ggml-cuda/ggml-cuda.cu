@@ -34,6 +34,7 @@
 #include "ggml-cuda/pad.cuh"
 #include "ggml-cuda/pool2d.cuh"
 #include "ggml-cuda/quantize.cuh"
+#include "ggml-cuda/rel-pos.cuh"
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/roll.cuh"
 #include "ggml-cuda/scale.cuh"
@@ -2722,6 +2723,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SOLVE_TRI:
             ggml_cuda_op_solve_tri(ctx, dst);
             break;
+        case GGML_OP_GET_REL_POS:
+            ggml_cuda_op_get_rel_pos(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -4612,6 +4616,15 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return true;
         case GGML_OP_SOLVE_TRI:
             return op->src[0]->ne[0] <= 64 && op->src[1]->ne[0] <= 32;
+        case GGML_OP_GET_REL_POS:
+            switch (op->src[0]->type) {
+                case GGML_TYPE_F16:
+                case GGML_TYPE_F32:
+                case GGML_TYPE_BF16:
+                    return true;
+                default:
+                    return false;
+            }
         default:
             return false;
     }
